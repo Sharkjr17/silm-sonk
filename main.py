@@ -14,9 +14,13 @@ from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.layout.containers import VSplit, HSplit, Window, ConditionalContainer
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
+from prompt_toolkit.document import Document
+from prompt_toolkit.layout.margins import ScrollbarMargin
+from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.application import Application
 
 
-# =========================
+# =========================     random.choices(list(level.keys()), weights=pathWeight, k=1)    [level[i]["weight"] for i in level]
 # ====== LOAD DATA ========
 # =========================
 with open('data.json', 'r') as file:
@@ -33,29 +37,23 @@ DIALOG_STYLE = Style.from_dict({
     'dialog shadow':      'bg:#00aa00',
 })
 
-# App style (keeps the green-on-black feel, with accents similar to your dialogs)
 APP_STYLE = Style.from_dict({
-    # Base background + default text
-    'background':               'bg:#000000 #00ff00',
-    'frame.border':             'bg:#000000 #00ff00',
-    'frame.title':              'bg:#88ff88 #000000',
-    # Title bar and status bar
-    'titlebar':                 'bg:#88ff88 #000000',
-    'status':                   'bg:#00aa00 #000000',
-    # Panels
-    'panel.title':              'bg:#000000 #00ff00',
-    'panel.body':               'bg:#000000 #00ff00',
-    # Accents (cycled via keybinding)
-    'accent.a':                 'bg:#000000 #00ff00',
-    'accent.b':                 'bg:#000000 #55ff55',
-    'accent.c':                 'bg:#000000 #00ffaa',
-    # Help overlay
-    'help':                     'bg:#001100 #00ff00',
-    'help.border':              'bg:#001100 #55ff55',
-    # Keys and labels
-    'label':                    'bg:#000000 #00ff00',
-    'key':                      'bg:#000000 #00ffaa',
-    'value':                    'bg:#000000 #ffffff',
+    "background": "bg:#000000 #00ff00",
+    "frame.border": "bg:#000000 #00ff00",
+    "frame.title": "bg:#88ff88 #000000",
+    "titlebar": "bg:#88ff88 #000000",
+    "status": "bg:#00aa00 #000000",
+    "panel.title": "bg:#000000 #00ff00",
+    "panel.body": "bg:#000000 #00ff00",
+    "panel.body.a": "bg:#000000 #00ff00",
+    "panel.body.b": "bg:#000000 #55ff55",
+    "panel.body.c": "bg:#000000 #00ffaa",
+    "help": "bg:#001100 #00ff00",
+    "help.border": "bg:#001100 #55ff55",
+    "label": "bg:#000000 #00ff00",
+    "key": "bg:#000000 #00ffaa",
+    "value": "bg:#000000 #ffffff",
+    "scrollbar": "bg:#000000 #00aa00",  # style for the log scrollbar
 })
 
 
@@ -94,221 +92,122 @@ def prompt_player_name(index):
             return name
         _ = input("Name cannot be empty. Press Enter to try again...")
 
-def prompt_game_selection():
-    return radiolist_dialog(
-        title="Welcome",
-        text="Select a Game",
-        values=[
-            ("Yahtzee", "Yahtzee"),
-            ("Blackjack", "Blackjack"),
-            ("Chess", "Chess"),
-            ("Monopoly", "Monopoly"),
-        ],
-        style=DIALOG_STYLE
-    ).run()
-
 
 # =========================
-# ===== GAME HANDLERS =====
+# ===== GAME HANDLER ======
 # =========================
-def play_yahtzee(players, data):
-    print(HTML(f"<ansigreen>Starting Yahtzee with {len(players)} player(s).</ansigreen>"))
-
-def play_blackjack(players, data):
-    print(HTML(f"<ansigreen>Starting Blackjack with {len(players)} player(s).</ansigreen>"))
-
-def play_chess(players, data):
-    print(HTML(f"<ansigreen>Starting Chess with {len(players)} player(s).</ansigreen>"))
-
 def play_monopoly(players, data):
     print(HTML(f"<ansigreen>Starting Monopoly with {len(players)} player(s).</ansigreen>"))
+    render_board(data["board"])
 
-
-GAMES_DISPATCHER = {
-    "Yahtzee": play_yahtzee,
-    "Blackjack": play_blackjack,
-    "Chess": play_chess,
-    "Monopoly": play_monopoly,
-}
-
-
-# =========================
-# === CAPABILITIES SCREEN ==
-# =========================
-def show_capabilities_screen(session):
+def render_board(board_data):
     """
-    Full-screen prompt_toolkit Application showing:
-    - Selected game and players
-    - Capability list
-    - Scrollable log output
-    - Status bar (clock)
-    - Help overlay
-    Keybindings: F1 (help), A (add log), C (cycle accent), Tab (focus), Q/Esc (exit)
+    Render a Monopoly board that scales to the terminal size.
+    - GO is bottom-right
+    - Board perimeter is 13x13 cells
+    - Edge tiles are uniform white spaces
+    - Property colors appear one cell inward, facing the board
     """
-    players = session["players"]
-    game = session["game"]
 
-    # Mutable app state
-    state = {
-        "accent": "accent.a",
-        "show_help": False,
-        "logs": ["Session initialized.", f"Game selected: {game}.", f"Players: {len(players)}."],
-        "focus_index": 0,  # 0=left, 1=right
+
+    COLOR_MAP = {
+        "brown": "#8B4513",
+        "red": "#FF0000",
+        "orange": "#FFA500",
+        "purple": "#800080",
+        "yellow": "#FFFF00",
+        "pink": "#FFC0CB",
+        "green": "#008000",
+        "blue": "#0000FF",
     }
 
-    # Left: session info + capabilities
-    def _player_lines():
-        for i, pdata in players.items():
-            yield ("class:label", f"  {i}: ")
-            yield ("class:value", f"{pdata['name']}")
-            yield ("", "\n")
+    def make_white_tile(label="?"):
+        return Window(
+            content=FormattedTextControl(label.center(3)),
+            style="bg:#ffffff #000000",
+            width=Dimension(weight=1),
+            height=Dimension(weight=1),
+        )
 
-    left_title = FormattedTextControl(lambda: [
-        ("class:panel.title", f"  Session ({game})  "),
-    ])
-    left_body = FormattedTextControl(lambda: list(_player_lines()) + [
-        ("", "\n"),
-        ("class:panel.title", "  Capabilities  "),
-        ("", "\n"),
-        ("class:label", "  • "),
-        ("", "Full-screen layout (HSplit/VSplit)\n"),
-        ("class:label", "  • "),
-        ("", "Styled panels and borders\n"),
-        ("class:label", "  • "),
-        ("", "Formatted text with dynamic accents\n"),
-        ("class:label", "  • "),
-        ("", "Scrollable log buffer\n"),
-        ("class:label", "  • "),
-        ("", "Keybindings (F1, A, C, Tab, Q/Esc)\n"),
-        ("class:label", "  • "),
-        ("", "Status bar with live clock\n"),
-    ])
+    def make_corner_tile(label):
+        return Window(
+            content=FormattedTextControl(label.center(5)),
+            style="bg:#ffffff #000000",
+            width=Dimension(weight=1),
+            height=Dimension(weight=1),
+        )
 
-    left_panel = HSplit([
-        Window(height=1, content=left_title, style="class:frame.title"),
-        Window(
-            content=left_body,
-            style=lambda: f"class:panel.body {state['accent']}",
-            wrap_lines=False,
-            always_hide_cursor=True
-        ),
-    ], style="class:frame.border")
+    def make_color_strip(color, orientation="h"):
+        """A thin strip of color, 1 unit thick, oriented horizontally or vertically."""
+        if orientation == "h":
+            return Window(char=" ", style=f"bg:{COLOR_MAP[color]} ",
+                          height=Dimension.exact(1), width=Dimension(weight=1))
+        else:
+            return Window(char=" ", style=f"bg:{COLOR_MAP[color]} ",
+                          width=Dimension.exact(1), height=Dimension(weight=1))
 
-    # Right: scrollable log
-    log_buffer = Buffer(read_only=True)
-    def refresh_log_text():
-        log_buffer.text = "\n".join(state["logs"])
-    refresh_log_text()
+    # Build grid
+    grid = [[None for _ in range(13)] for _ in range(13)]
 
-    right_title = FormattedTextControl(lambda: [
-        ("class:panel.title", "  Event log  "),
-    ])
-    right_panel = HSplit([
-        Window(height=1, content=right_title, style="class:frame.title"),
-        Window(BufferControl(buffer=log_buffer), style="class:panel.body", wrap_lines=False),
-    ], style="class:frame.border")
+    # Mapping of board index to (row,col) around perimeter clockwise starting bottom-right
+    coords = []
+    for c in range(12, -1, -1):  # bottom row
+        coords.append((12, c))
+    for r in range(11, -1, -1):  # left col
+        coords.append((r, 0))
+    for c in range(1, 13):       # top row
+        coords.append((0, c))
+    for r in range(1, 12):       # right col
+        coords.append((r, 12))
 
-    # Title bar and status bar
-    titlebar = Window(
-        height=1,
-        content=FormattedTextControl(lambda: [
-            ("class:titlebar", "  Game Control Center "),
-            ("", "— "),
-            ("class:label", "F1"),
-            ("", " Help  "),
-            ("class:label", "A"),
-            ("", " Add log  "),
-            ("class:label", "C"),
-            ("", " Accent  "),
-            ("class:label", "Tab"),
-            ("", " Focus  "),
-            ("class:label", "Q/Esc"),
-            ("", " Exit"),
-        ]),
-        style="class:titlebar",
-        always_hide_cursor=True
-    )
+    # Place tiles
+    for i, (r, c) in enumerate(coords, start=1):
+        space = board_data.get(str(i), {"type": "blank", "name": "?"})
+        t = space["type"]
 
-    def _clock_text():
-        return time.strftime("%H:%M:%S")
+        if t == "start":
+            grid[r][c] = make_corner_tile("GO")
+        elif t == "jail":
+            grid[r][c] = make_corner_tile("JAIL")
+        elif t == "free parking":
+            grid[r][c] = make_corner_tile("FP")
+        elif t == "go to jail":
+            grid[r][c] = make_corner_tile("G2J")
+        else:
+            # Default: white tile with label
+            grid[r][c] = make_white_tile(space.get("abbr", space.get("name", "?"))[:3])
 
-    statusbar = Window(
-        height=1,
-        content=FormattedTextControl(lambda: [
-            ("class:status", f"  Players: {len(players)}  "),
-            ("", " | "),
-            ("class:status", f"Game: {game}  "),
-            ("", " | "),
-            ("class:status", f"Time: {_clock_text()}  "),
-        ]),
-        style="class:status",
-        always_hide_cursor=True
-    )
+            # If it's a property, add a color strip inward
+            if t == "property":
+                if r == 12:   # bottom row → strip above
+                    grid[r-1][c] = make_color_strip(space["color"], "h")
+                elif r == 0:  # top row → strip below
+                    grid[r+1][c] = make_color_strip(space["color"], "h")
+                elif c == 0:  # left col → strip right
+                    grid[r][c+1] = make_color_strip(space["color"], "v")
+                elif c == 12: # right col → strip left
+                    grid[r][c-1] = make_color_strip(space["color"], "v")
 
-    # Help overlay
-    help_lines = [
-        ("class:help.border", " Help ".center(40, "—")),
-        ("", "\n\n"),
-        ("class:key", "F1"), ("", " Toggle help\n"),
-        ("class:key", "A"), ("", " Append a demo log entry\n"),
-        ("class:key", "C"), ("", " Cycle accent color\n"),
-        ("class:key", "Tab"), ("", " Switch focus left/right\n"),
-        ("class:key", "Q / Esc"), ("", " Exit screen\n"),
-    ]
-    help_window = ConditionalContainer(
-        content=Window(FormattedTextControl(lambda: help_lines), style="class:help", always_hide_cursor=True),
-        filter=Condition(lambda: state["show_help"])
-    )
+    # Fill interior with black
+    for r in range(13):
+        for c in range(13):
+            if grid[r][c] is None:
+                grid[r][c] = Window(style="bg:#000000",
+                                    width=Dimension(weight=1),
+                                    height=Dimension(weight=1))
 
-    # Root layout
-    body = VSplit(
-        [
-            left_panel,
-            Window(width=1, char="│", style="class:frame.border"),
-            right_panel,
-        ],
-        padding=0,
-        style="class:background"
-    )
-    root = HSplit([titlebar, body, statusbar, help_window])
+    # Convert to layout
+    rows = []
+    for r in range(13):
+        row_cells = [grid[r][c] for c in range(13)]
+        rows.append(VSplit(row_cells, padding=0, height=Dimension(weight=1)))
+    root = HSplit(rows, padding=0)
 
-    # Keybindings
-    kb = KeyBindings()
-
-    @kb.add("f1")
-    def _(event):
-        state["show_help"] = not state["show_help"]
-
-    @kb.add("a")
-    def _(event):
-        state["logs"].append(f"[{_clock_text()}] Demo log entry (#{len(state['logs'])+1})")
-        refresh_log_text()
-
-    @kb.add("c")
-    def _(event):
-        order = ["accent.a", "accent.b", "accent.c"]
-        idx = (order.index(state["accent"]) + 1) % len(order)
-        state["accent"] = order[idx]
-
-    @kb.add("tab")
-    def _(event):
-        state["focus_index"] = 1 - state["focus_index"]
-        event.app.layout.focus(right_panel if state["focus_index"] else left_panel)
-
-    @kb.add("q")
-    @kb.add("escape")
-    def _(event):
-        event.app.exit()
-
-    # Application
-    app = Application(
-        layout=Layout(root, focused_element=left_panel),
-        key_bindings=kb,
-        style=APP_STYLE,
-        full_screen=True,
-        mouse_support=False
-    )
+    app = Application(layout=Layout(root), style=APP_STYLE, full_screen=True)
     app.run()
+
+
+
 
 
 # =========================
@@ -331,27 +230,14 @@ def start():
             return None
         players[i] = {"name": name, "wins": 0, "losses": 0}
 
-    game = prompt_game_selection()
-    if game is None:
-        print(HTML("<ansired>No game selected. Exiting.</ansired>"))
-        return None
-
+    game = "Monopoly"  # fixed
     print(HTML(f"<ansiyellow>Players: {player_count}, Game: {game}</ansiyellow>"))
     return {"players": players, "game": game}
 
 
 def dispatch_game(session):
-    # Show the full-screen capabilities screen first
-    show_capabilities_screen(session)
-
-    # Then proceed to the selected game (optional; comment out if you want to return to menu instead)
-    game = session["game"]
-    players = session["players"]
-    handler = GAMES_DISPATCHER.get(game)
-    if handler:
-        handler(players, data)
-    else:
-        print(HTML(f"<ansired>Unknown game selection: {game}</ansired>"))
+    # Always launch Monopoly
+    play_monopoly(session["players"], data)
 
 
 if __name__ == "__main__":
